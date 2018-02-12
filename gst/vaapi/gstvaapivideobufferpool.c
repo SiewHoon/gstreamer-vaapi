@@ -50,6 +50,7 @@ struct _GstVaapiVideoBufferPoolPrivate
   GstVaapiDisplay *display;
   guint options;
   guint use_dmabuf_memory:1;
+  gchar **g_options;
 };
 
 #define GST_VAAPI_VIDEO_BUFFER_POOL_GET_PRIVATE(obj) \
@@ -64,6 +65,7 @@ gst_vaapi_video_buffer_pool_finalize (GObject * object)
 
   gst_vaapi_display_replace (&priv->display, NULL);
   g_clear_object (&priv->allocator);
+  g_clear_pointer (&priv->g_options, g_free);
 
   G_OBJECT_CLASS (gst_vaapi_video_buffer_pool_parent_class)->finalize (object);
 }
@@ -117,15 +119,41 @@ fill_video_alignment (GstVaapiVideoBufferPool * pool, GstVideoAlignment * align)
 static const gchar **
 gst_vaapi_video_buffer_pool_get_options (GstBufferPool * pool)
 {
-  static const gchar *g_options[] = {
-    GST_BUFFER_POOL_OPTION_VIDEO_META,
-    GST_BUFFER_POOL_OPTION_VAAPI_VIDEO_META,
-    GST_BUFFER_POOL_OPTION_VIDEO_GL_TEXTURE_UPLOAD_META,
-    GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT,
-    NULL,
-  };
+  GstVaapiVideoBufferPoolPrivate *const priv =
+      GST_VAAPI_VIDEO_BUFFER_POOL (pool)->priv;
+  guint i, n = 1;
 
-  return g_options;
+  /* *INDENT-OFF* */
+  static const struct {
+    guint option;
+    const gchar *name;
+  } options_map[] = {
+    { GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_META,
+      GST_BUFFER_POOL_OPTION_VIDEO_META },
+    { GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_GL_TEXTURE_UPLOAD,
+      GST_BUFFER_POOL_OPTION_VIDEO_GL_TEXTURE_UPLOAD_META },
+    { GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT,
+      GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT },
+  };
+  /* *INDENT-ON* */
+
+  if (priv->g_options)
+    return (const gchar **) priv->g_options;
+
+  for (i = 0; i < G_N_ELEMENTS (options_map); i++) {
+    if (priv->options & options_map[i].option)
+      n++;
+  }
+
+  priv->g_options = g_new (gchar *, n + 1);
+  priv->g_options[n--] = NULL;
+  priv->g_options[0] = (gchar *) GST_BUFFER_POOL_OPTION_VAAPI_VIDEO_META;
+  for (i = 0; i < G_N_ELEMENTS (options_map); i++) {
+    if (priv->options & options_map[i].option)
+      priv->g_options[n--] = (gchar *) options_map[i].name;
+  }
+
+  return (const gchar **) priv->g_options;
 }
 
 static gboolean
@@ -238,6 +266,9 @@ gst_vaapi_video_buffer_pool_set_config (GstBufferPool * pool,
   if (!priv->use_dmabuf_memory && gst_buffer_pool_config_has_option (config,
           GST_BUFFER_POOL_OPTION_VIDEO_GL_TEXTURE_UPLOAD_META))
     priv->options |= GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_GL_TEXTURE_UPLOAD;
+
+  /* reset the options because they could have changed */
+  g_clear_pointer (&priv->g_options, g_free);
 
   ret =
       GST_BUFFER_POOL_CLASS
