@@ -632,6 +632,10 @@ gst_vaapi_plugin_base_create_pool (GstVaapiPluginBase * plugin, GstCaps * caps,
     gst_buffer_pool_config_add_option (config,
         GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
   }
+  if (options & GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_DMABUF) {
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_VIDEO_DMABUF);
+  }
 #if (USE_GLX || USE_EGL)
   if (options & GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_GL_TEXTURE_UPLOAD) {
     gst_buffer_pool_config_add_option (config,
@@ -772,9 +776,10 @@ gst_vaapi_plugin_base_propose_allocation (GstVaapiPluginBase * plugin,
     GstQuery * query)
 {
   GstCaps *caps = NULL;
-  GstBufferPool *pool = NULL;
+  GstBufferPool *pool = NULL, *dmabuf_pool = NULL;
   gboolean need_pool;
-  guint size = 0, n_allocators;
+  guint size = 0, dmabuf_size = 0, n_allocators;
+  GstAllocator *dmabuf_allocator = NULL;
 
   gst_query_parse_allocation (query, &caps, &need_pool);
   if (!caps)
@@ -783,6 +788,20 @@ gst_vaapi_plugin_base_propose_allocation (GstVaapiPluginBase * plugin,
   if (!ensure_sinkpad_allocator (plugin, caps, &size))
     return FALSE;
 
+  /* second allocator for dmabuf */
+  {
+    GstVideoInfo vinfo;
+
+    if ((gst_caps_is_video_raw (caps)
+            || gst_vaapi_caps_feature_contains (caps,
+                GST_VAAPI_CAPS_FEATURE_DMABUF))
+        && gst_video_info_from_caps (&vinfo, caps)) {
+      dmabuf_allocator =
+          gst_vaapi_dmabuf_allocator_new (plugin->display, &vinfo,
+          GST_VAAPI_SURFACE_ALLOC_FLAG_LINEAR_STORAGE, GST_PAD_SINK);
+    }
+  }
+
   if (need_pool) {
     pool = gst_vaapi_plugin_base_create_pool (plugin, caps, size,
         BUFFER_POOL_SINK_MIN_BUFFERS, 0,
@@ -790,6 +809,21 @@ gst_vaapi_plugin_base_propose_allocation (GstVaapiPluginBase * plugin,
         plugin->sinkpad_allocator);
     if (!pool)
       return FALSE;
+
+    /* second pool for dmabuf */
+    if (dmabuf_allocator) {
+      const GstVideoInfo *image_info;
+
+      dmabuf_size = size;
+      image_info = gst_allocator_get_vaapi_video_info (dmabuf_allocator, NULL);
+      if (image_info)
+        dmabuf_size = GST_VIDEO_INFO_SIZE (image_info);
+
+      dmabuf_pool = gst_vaapi_plugin_base_create_pool (plugin, caps,
+          dmabuf_size, BUFFER_POOL_SINK_MIN_BUFFERS, 0,
+          GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_META
+          | GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_DMABUF, dmabuf_allocator);
+    }
   }
 
   /* Set sinkpad allocator as the last allocation param.
@@ -806,11 +840,21 @@ gst_vaapi_plugin_base_propose_allocation (GstVaapiPluginBase * plugin,
     gst_object_unref (allocator);
   }
   gst_query_add_allocation_param (query, plugin->sinkpad_allocator, NULL);
+  if (dmabuf_allocator) {
+    gst_query_add_allocation_param (query, dmabuf_allocator, NULL);
+    gst_object_unref (dmabuf_allocator);
+  }
 
   gst_query_add_allocation_pool (query, pool, size,
       BUFFER_POOL_SINK_MIN_BUFFERS, 0);
   if (pool)
     gst_object_unref (pool);
+
+  if (dmabuf_pool) {
+    gst_query_add_allocation_pool (query, dmabuf_pool, dmabuf_size,
+        BUFFER_POOL_SINK_MIN_BUFFERS, 0);
+    gst_object_unref (dmabuf_pool);
+  }
 
   gst_query_add_allocation_meta (query, GST_VAAPI_VIDEO_META_API_TYPE, NULL);
   gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
