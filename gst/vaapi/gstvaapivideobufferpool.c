@@ -134,6 +134,8 @@ gst_vaapi_video_buffer_pool_get_options (GstBufferPool * pool)
       GST_BUFFER_POOL_OPTION_VIDEO_GL_TEXTURE_UPLOAD_META },
     { GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT,
       GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT },
+    { GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_DMABUF,
+      GST_BUFFER_POOL_OPTION_VIDEO_DMABUF },
   };
   /* *INDENT-ON* */
 
@@ -266,6 +268,9 @@ gst_vaapi_video_buffer_pool_set_config (GstBufferPool * pool,
   if (!priv->use_dmabuf_memory && gst_buffer_pool_config_has_option (config,
           GST_BUFFER_POOL_OPTION_VIDEO_GL_TEXTURE_UPLOAD_META))
     priv->options |= GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_GL_TEXTURE_UPLOAD;
+
+  if (priv->use_dmabuf_memory)
+    priv->options |= GST_VAAPI_VIDEO_BUFFER_POOL_OPTION_VIDEO_DMABUF;
 
   /* reset the options because they could have changed */
   g_clear_pointer (&priv->g_options, g_free);
